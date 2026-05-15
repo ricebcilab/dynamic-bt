@@ -1,0 +1,83 @@
+"""Skill: transport a grasped object to the mouth position.
+
+Moves toward mouth_pos while yawing (around world Z only). Orientation
+mode is configurable: point EEF z-axis toward mouth or toward world +Y.
+Pitch and roll are preserved. APF uses bbox-vs-bbox distances.
+"""
+
+import numpy as np
+from scipy.spatial.transform import Rotation as R
+
+from .base_skill import BaseSkill, EPS
+
+
+class RetractObject(BaseSkill):
+    """Transport grasped object to mouth with APF.
+
+    Params: gain, max_linear_speed, max_angular_speed, safe_dist,
+            repulsive_gain, orient_mode ("mouth" or "world_y")
+    """
+
+    def __init__(
+        self,
+        gain=1.0, max_linear_speed=0.3, max_angular_speed=1.0,
+        safe_dist=0.03, repulsive_gain=0.5, orient_mode="world_y",
+        **kwargs):
+
+        super().__init__()
+
+        self.gain = gain
+        self.max_linear_speed = max_linear_speed
+        self.max_angular_speed = max_angular_speed
+        self.safe_dist = safe_dist
+        self.repulsive_gain = repulsive_gain
+        self.orient_mode = orient_mode
+
+    def get_action(self, task_state):
+        eef_pos = task_state['eef_pos']
+        eef_rot = R.from_quat(task_state['eef_quat'])
+        mouth_pos = task_state['mouth_pos']
+        self.tgt_id = task_state['grasped_id']
+
+        if self.orient_mode == "mouth":
+            target_rot = self._yaw_toward(eef_rot, mouth_pos - eef_pos)
+        else:
+            target_rot = self._yaw_toward(eef_rot, self.WORLD_Y)
+
+        twist = self._compute_twist(eef_pos, eef_rot, mouth_pos, target_rot)
+
+        # APF: grasped-object bbox vs obstacle bboxes
+        obj_bbox = task_state['obj_bbox'].get(self.tgt_id)
+        obstacles = [bbox for oid, bbox in task_state['obj_bbox'].items()
+                     if oid != self.tgt_id]
+        apf = self._compute_apf_with_object(
+            obj_bbox, obstacles, self.safe_dist, self.repulsive_gain)
+
+        # Vertical escape when APF strongly opposes the twist
+        if (np.dot(twist[:3], apf)
+                < -np.linalg.norm(twist[:3]) * np.linalg.norm(apf) * 0.8):
+            twist[:3] += np.array(
+                [0.0, 0.0, abs(np.dot(twist[:3], apf))])
+        twist[:3] += apf
+
+        return np.concatenate([twist, [-1.0]])  # keep gripper closed
+
+    def get_candidates(self, task_state):
+        action = self.get_action(task_state)
+        key = self.received_message.get("tgt_id", self.tgt_id)
+        return {str(key): action}
+
+    def _yaw_toward(self, eef_rot, direction):
+        """Yaw EEF around world Z so its z-axis projects toward direction in XY."""
+        eef_fwd_xy, norm_fwd = self._project_to_xy(
+            eef_rot.apply(self.WORLD_Z))
+        dir_xy, norm_dir = self._project_to_xy(direction)
+
+        if norm_fwd < EPS or norm_dir < EPS:
+            return eef_rot
+
+        yaw_target = np.arctan2(dir_xy[1], dir_xy[0])
+        yaw_current = np.arctan2(eef_fwd_xy[1], eef_fwd_xy[0])
+        delta_yaw = (yaw_target - yaw_current) % (2 * np.pi)
+
+        return R.from_rotvec(delta_yaw * self.WORLD_Z) * eef_rot

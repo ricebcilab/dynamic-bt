@@ -10,7 +10,7 @@ from .base_skill import BaseSkill
 
 
 class Retreat(BaseSkill):
-    """Move EEF straight up at linear_speed. Gripper open.
+    """Move EEF straight up at linear_speed.
 
     Params: linear_speed
     """
@@ -25,7 +25,7 @@ class Retreat(BaseSkill):
         self.linear_speed = linear_speed
 
     def get_action(self, task_state):
-        return np.array([0.0, 0.0, self.linear_speed, 0.0, 0.0, 0.0, 1.0])
+        return np.array([0.0, 0.0, self.linear_speed, 0.0, 0.0, 0.0, 0.0])
 
     def get_candidates(self, task_state):
         return {type(self).__name__: self.get_action(task_state)}

@@ -19,9 +19,10 @@ class DescendAndGrasp(BaseSkill):
     """
 
     def __init__(
-        self,
+        self, obj_cfg_path=None,
         gain=1.0, max_linear_speed=0.2, max_angular_speed=0.5,
-        grasp_tolerance=0.1, obj_cfg_path=None,
+        grasp_tolerance=0.1, grasp_offset_max=0.05, grasp_offset_min=0.0,
+        grasp_offset_scale=0.4, gripper_offset=0.055,
         **kwargs):
 
         super().__init__()
@@ -30,6 +31,10 @@ class DescendAndGrasp(BaseSkill):
         self.max_linear_speed = max_linear_speed
         self.max_angular_speed = max_angular_speed
         self.grasp_tolerance = grasp_tolerance
+        self.grasp_offset_max = float(grasp_offset_max)
+        self.grasp_offset_min = float(grasp_offset_min)
+        self.grasp_offset_scale = float(grasp_offset_scale)
+        self.gripper_offset = float(gripper_offset)
 
         if obj_cfg_path:
             with open(obj_cfg_path, 'r') as f:
@@ -63,15 +68,23 @@ class DescendAndGrasp(BaseSkill):
 
         # Continue aligning to grasp orientation while descending
         target_rot = self._grasp_orientation(eef_rot, obj_quat, self.tgt_id)
-        twist = self._compute_twist(eef_pos, eef_rot, obj_pos, target_rot)
 
-        # Close gripper when within tolerance
+        h_obj = float(obj_bbox[5] - obj_bbox[4])
+        grasp_offset = float(np.clip(
+            self.grasp_offset_max - h_obj * self.grasp_offset_scale,
+            self.grasp_offset_min, self.grasp_offset_max))
+        target_pos = obj_pos + target_rot.apply(
+            np.array([0.0, 0.0, -(grasp_offset + self.gripper_offset)]))
+
+        twist = self._compute_twist(eef_pos, eef_rot, target_pos, target_rot)
+
+        # Close gripper when within tolerance of the offset-corrected target
         bbox_size = np.array([
             obj_bbox[1] - obj_bbox[0],
             obj_bbox[3] - obj_bbox[2],
             obj_bbox[5] - obj_bbox[4],
         ])
-        close = np.all(np.abs(obj_pos - eef_pos) <= self.grasp_tolerance * bbox_size)
+        close = np.all(np.abs(target_pos - eef_pos) <= self.grasp_tolerance * bbox_size)
 
         return np.concatenate([twist, [-1.0 if close else 0.0]])
 

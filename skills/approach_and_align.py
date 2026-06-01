@@ -44,6 +44,9 @@ class ApproachAndAlign(BaseSkill):
         eef_pos = task_state['eef_pos']
         eef_rot = R.from_quat(task_state['eef_quat'])
         tgt_id = task_state['tgt_id']
+        if not self._is_compatible(tgt_id, task_state):
+            return np.zeros(7)
+
         obj_pos = task_state['obj_pos'][tgt_id]
         obj_quat = task_state['obj_quat'][tgt_id]
         obj_bbox = task_state['obj_bbox'][tgt_id]
@@ -68,14 +71,38 @@ class ApproachAndAlign(BaseSkill):
 
         return np.concatenate([twist, [1.0]])  # gripper open
 
+    def is_complete(self, task_state):
+        filtered = task_state.copy()
+        filtered['obj_bbox'] = {
+            oid: bbox for oid, bbox in task_state['obj_bbox'].items()
+            if self._is_compatible(oid, task_state)
+        }
+        return super().is_complete(filtered)
+
     def get_candidates(self, task_state):
-        """One candidate per object, keyed by object ID."""
+        """One candidate per compatible object, keyed by object ID."""
         candidates = {}
         for oid in task_state['obj_pos'].keys():
+            if not self._is_compatible(oid, task_state):
+                continue
             assumed = task_state.copy()
             assumed['tgt_id'] = oid
             candidates[str(oid)] = self.get_action(assumed)
         return candidates if candidates else None
+
+    def _is_compatible(self, oid, task_state):
+        if not self.food_json:
+            return True
+
+        cfg = self.food_json.get(str(oid))
+        if cfg is None:
+            return True
+
+        compatible_eefs = cfg.get('compatible_eefs')
+        if compatible_eefs is None:
+            return True
+
+        return task_state.get('eef', 'gripper') in compatible_eefs
 
     # ------------------------------------------------------------------
     # Grasp orientation

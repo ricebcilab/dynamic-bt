@@ -129,7 +129,10 @@ class DynamicBT:
             if has_skill:
                 # Build skill instance
                 skill_cfg = dict(edef.get("skill", {}))
-                skill_cls = getattr(_skills, skill_cfg.pop("class"))
+                skill_name = skill_cfg.pop("class")
+                skill_cls = _skills.SKILL_REGISTRY.get(skill_name)
+                if skill_cls is None:
+                    skill_cls = getattr(_skills, skill_name)
                 skill = skill_cls(**skill_cfg, **skill_kwargs)
 
                 # Build criteria list and attach to skill

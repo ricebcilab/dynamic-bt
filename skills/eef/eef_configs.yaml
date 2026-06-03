@@ -1,0 +1,42 @@
+gripper:
+  is_bare: true
+
+fork:
+  bracket:
+    # In meters, measured in the Kinova base frame.
+    pos: [0.031, 0.387, 0.065]
+    rot_frame: kinova_webapp
+    # Degrees, using Kinova webapp theta x/y/z convention.
+    rot_xyz: [0.0, 180.0, 0.0]
+    slide_axis: [1.0, 0.0, 0.0]
+    slide_distance: 0.15
+    # High transit height before and after low bracket docking.
+    clearance_z: 0.25
+    install_ready_pose:
+      pos: [0.580, 0.0, 0.43]
+      rot_frame: kinova_webapp
+      rot_xyz: [90.0, -90.0, 90.0]
+    uninstall_ready_pose:
+      pos: [0.580, 0.0, 0.43]
+      rot_frame: kinova_webapp
+      rot_xyz: [90.0, 0.0, 90.0]
+
+spoon:
+  bracket:
+    # In meters, measured in the Kinova base frame.
+    pos: [0.031, -0.327, 0.065]
+    rot_frame: kinova_webapp
+    # Degrees, using Kinova webapp theta x/y/z convention.
+    rot_xyz: [0.0, 180.0, 0.0]
+    slide_axis: [1.0, 0.0, 0.0]
+    slide_distance: 0.15
+    # High transit height before and after low bracket docking.
+    clearance_z: 0.25
+    install_ready_pose:
+      pos: [0.580, 0.0, 0.43]
+      rot_frame: kinova_webapp
+      rot_xyz: [90.0, -90.0, 90.0]
+    uninstall_ready_pose:
+      pos: [0.580, 0.0, 0.43]
+      rot_frame: kinova_webapp
+      rot_xyz: [90.0, 0.0, 90.0]

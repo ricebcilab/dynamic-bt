@@ -1,21 +1,21 @@
-"""Skill: twirl the installed utensil for acquisition."""
+"""Skill: actuate the installed utensil scoop joint for acquisition."""
 
 import time
 
 import numpy as np
 
-from .base_skill import BaseSkill
+from ..base_skill import BaseSkill
 
 
-class Twirl(BaseSkill):
-    """Emit raw twirl velocity on action[7].
+class Scoop(BaseSkill):
+    """Emit scoop direction command on action[8].
 
-    Params: velocity_raw, duration_s, max_duration_s, hold_threshold.
+    Params: direction, duration_s, max_duration_s, hold_threshold.
     """
 
     def __init__(
         self,
-        velocity_raw=150.0,
+        direction=1.0,
         duration_s=1.5,
         max_duration_s=5.0,
         hold_threshold=1e-3,
@@ -23,7 +23,7 @@ class Twirl(BaseSkill):
 
         super().__init__()
 
-        self.velocity_raw = float(velocity_raw)
+        self.direction = float(direction)
         self.duration_s = float(duration_s)
         self.max_duration_s = float(max_duration_s)
         self.hold_threshold = float(hold_threshold)
@@ -38,7 +38,7 @@ class Twirl(BaseSkill):
             self.start_time = time.monotonic()
 
         action = np.zeros(9, dtype=np.float32)
-        action[7] = self.velocity_raw
+        action[8] = self.direction
         return action
 
     def get_candidates(self, task_state):
@@ -54,4 +54,4 @@ class Twirl(BaseSkill):
         if elapsed < self.duration_s:
             return False
 
-        return abs(float(task_state.get("operator_twirl", 0.0))) <= self.hold_threshold
+        return abs(float(task_state.get("operator_scoop", 0.0))) <= self.hold_threshold

@@ -6,3 +6,4 @@ from .place_and_release import PlaceAndRelease
 from .retreat import Retreat
 from .twirl import Twirl
 from .scoop import Scoop
+from .stab import Stab

@@ -243,13 +243,19 @@ class _EEFInstallMotion(BaseSkill):
             if self._phase_start_ts is None:
                 self._phase_start_ts = ts
             if (ts - self._phase_start_ts) >= self.open_duration_s * 1e9:
-                task_state["eef"] = self.eef
                 self._advance("slide_out", ts)
 
         elif self._phase == "slide_out":
             action = self._move_action(
                 eef_pos, eef_rot, lineup_pos, bracket_rot, 0.0)
             if at_pose(eef_pos, eef_rot, lineup_pos, bracket_rot,
+                       self.pos_tolerance, self.rot_tolerance):
+                self._advance("lift_out", ts)
+
+        elif self._phase == "lift_out":
+            action = self._move_action(
+                eef_pos, eef_rot, with_z(lineup_pos, safe_z), bracket_rot, 0.0)
+            if at_pose(eef_pos, eef_rot, with_z(lineup_pos, safe_z), bracket_rot,
                        self.pos_tolerance, self.rot_tolerance):
                 self._advance("ready", ts)
 

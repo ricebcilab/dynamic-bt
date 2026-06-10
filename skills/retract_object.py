@@ -22,7 +22,7 @@ class RetractObject(BaseSkill):
         self,
         gain=1.0, max_linear_speed=0.3, max_angular_speed=1.0,
         safe_dist=0.03, repulsive_gain=0.5, orient_mode="world_y",
-        tool_eefs=("fork", "spoon"),
+        tool_eefs=("fork", "spoon"), tool_scoop_command=-1.0,
         **kwargs):
 
         super().__init__()
@@ -36,6 +36,7 @@ class RetractObject(BaseSkill):
         if isinstance(tool_eefs, str):
             tool_eefs = (tool_eefs,)
         self.tool_eefs = {str(eef) for eef in tool_eefs}
+        self.tool_scoop_command = float(tool_scoop_command)
 
     def get_action(self, task_state):
         if self._is_tool_mode(task_state):
@@ -108,6 +109,7 @@ class RetractObject(BaseSkill):
 
         action = np.zeros(9)
         action[:6] = twist
+        action[8] = self.tool_scoop_command
         return action
 
     def _yaw_toward(self, eef_rot, direction):

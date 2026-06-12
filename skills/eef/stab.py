@@ -1,10 +1,9 @@
 """Skill: drive the installed utensil downward until tip clearance is safe."""
 
-import math
-
 import numpy as np
 
 from ..base_skill import BaseSkill
+from .common import tool_tip_clearance
 
 
 class Stab(BaseSkill):
@@ -21,6 +20,7 @@ class Stab(BaseSkill):
         scoop_servo_to_tip=0.167,
         table_z=0.0,
         z_calibration_offset=0.0,
+        default_scoop_angle_deg=270.0,
         fast_clearance=0.05,
         slow_clearance=0.01,
         fast_z_speed=-0.05,
@@ -33,6 +33,7 @@ class Stab(BaseSkill):
         self.scoop_servo_to_tip = float(scoop_servo_to_tip)
         self.table_z = float(table_z)
         self.z_calibration_offset = float(z_calibration_offset)
+        self.default_scoop_angle_deg = float(default_scoop_angle_deg)
         self.fast_clearance = float(fast_clearance)
         self.slow_clearance = float(slow_clearance)
         self.fast_z_speed = float(fast_z_speed)
@@ -54,13 +55,11 @@ class Stab(BaseSkill):
         return self._tip_clearance(task_state) <= self.slow_clearance
 
     def _tip_clearance(self, task_state):
-        eef_z = float(task_state["eef_pos"][2])
-        scoop_angle_deg = float(task_state.get("fork_scoop", 270.0))
-        tip_contact_eef_z = (
-            self.table_z
-            + self.z_calibration_offset
-            + self.gripper_to_scoop_servo
-            + self.scoop_servo_to_tip
-            * math.sin(math.radians(scoop_angle_deg - 180.0))
+        return tool_tip_clearance(
+            task_state,
+            gripper_to_scoop_servo=self.gripper_to_scoop_servo,
+            scoop_servo_to_tip=self.scoop_servo_to_tip,
+            table_z=self.table_z,
+            z_calibration_offset=self.z_calibration_offset,
+            default_scoop_angle_deg=self.default_scoop_angle_deg,
         )
-        return eef_z - tip_contact_eef_z

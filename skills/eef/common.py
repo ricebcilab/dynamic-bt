@@ -47,6 +47,49 @@ def clearance_z(bracket, positions, default_offset=0.08):
     return min_z + offset
 
 
+def scoop_angle_deg(task_state, default=270.0):
+    if "scoop" in task_state:
+        return float(task_state["scoop"])
+    return float(task_state.get("fork_scoop", default))
+
+
+def tool_tip_contact_eef_z(
+    task_state,
+    gripper_to_scoop_servo=0.13,
+    scoop_servo_to_tip=0.167,
+    table_z=0.0,
+    z_calibration_offset=0.0,
+    default_scoop_angle_deg=270.0,
+):
+    angle = scoop_angle_deg(task_state, default=default_scoop_angle_deg)
+    return (
+        float(table_z)
+        + float(z_calibration_offset)
+        + float(gripper_to_scoop_servo)
+        + float(scoop_servo_to_tip) * np.sin(np.deg2rad(angle - 180.0))
+    )
+
+
+def tool_tip_clearance(
+    task_state,
+    gripper_to_scoop_servo=0.13,
+    scoop_servo_to_tip=0.167,
+    table_z=0.0,
+    z_calibration_offset=0.0,
+    default_scoop_angle_deg=270.0,
+):
+    eef_z = float(np.asarray(task_state["eef_pos"], dtype=np.float64)[2])
+    contact_eef_z = tool_tip_contact_eef_z(
+        task_state,
+        gripper_to_scoop_servo=gripper_to_scoop_servo,
+        scoop_servo_to_tip=scoop_servo_to_tip,
+        table_z=table_z,
+        z_calibration_offset=z_calibration_offset,
+        default_scoop_angle_deg=default_scoop_angle_deg,
+    )
+    return eef_z - contact_eef_z
+
+
 def rotation_from_config(cfg, default_rot=None, default_frame="internal"):
     cfg = cfg or {}
     if "rot_xyz" not in cfg:

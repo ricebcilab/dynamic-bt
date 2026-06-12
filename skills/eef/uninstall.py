@@ -21,6 +21,8 @@ from .common import (
 class EEFUninstall(BaseSkill):
     """Line up with an EEF bracket, slide in, close gripper, and lift away."""
 
+    FLOOR_GUARD_BYPASS_PHASES = {"descend", "slide_in"}
+
     def __init__(
         self,
         eef="auto",
@@ -33,6 +35,9 @@ class EEFUninstall(BaseSkill):
         release_duration_s=0.5,
         close_duration_s=None,
         close_gripper_speed=-1.0,
+        home_first=True,
+        home_timeout_s=None,
+        home_scoop_command=-1.0,
         **kwargs):
 
         super().__init__()
@@ -47,13 +52,16 @@ class EEFUninstall(BaseSkill):
             release_duration_s if close_duration_s is None
             else close_duration_s)
         self.close_gripper_speed = close_gripper_speed
+        self.home_first = bool(home_first)
+        self.home_timeout_s = home_timeout_s
+        self.home_scoop_command = float(home_scoop_command)
         self.reset()
 
     def reset(self):
         super().reset()
         self._active_eef = None
         self._bracket = None
-        self._phase = "raise"
+        self._phase = "home" if self.home_first else "raise"
         self._phase_start_ts = None
         self._done = False
         self._last_action_ts = None
@@ -63,6 +71,7 @@ class EEFUninstall(BaseSkill):
     def get_action(self, task_state):
         ts = task_state.get("ts", 0)
         if self._last_action_ts == ts and self._last_action is not None:
+            self._maybe_request_floor_guard_bypass(task_state)
             return self._last_action.copy()
 
         self._ensure_initialized(task_state)
@@ -70,6 +79,7 @@ class EEFUninstall(BaseSkill):
             action = np.zeros(9, dtype=np.float32)
             self._cache_action(ts, action)
             return action
+        self._maybe_request_floor_guard_bypass(task_state)
 
         bracket_pos, bracket_rot, slide_axis, slide_distance = bracket_pose(
             self._bracket)
@@ -93,7 +103,30 @@ class EEFUninstall(BaseSkill):
             default_frame=self._bracket.get("rot_frame", "internal"),
         )
 
-        if self._phase == "raise":
+        if self._phase == "home":
+            action = action9(scoop_cmd=self.home_scoop_command)
+            result = task_state.pop("eef_admin_home_result", None)
+            if result == "done":
+                self._advance("move_ready", ts)
+            elif result == "failed":
+                logging.error(
+                    "Failed to move Home before uninstalling EEF '%s'",
+                    self._active_eef)
+                self._done = True
+            else:
+                task_state["eef_admin_home_request"] = {
+                    "scoop_up": self.home_scoop_command < 0.0,
+                    "timeout": self.home_timeout_s,
+                }
+
+        elif self._phase == "move_ready":
+            action = self._move_action(
+                eef_pos, eef_rot, ready_pos, ready_rot, 0.0)
+            if at_pose(eef_pos, eef_rot, ready_pos, ready_rot,
+                       self.pos_tolerance, self.rot_tolerance):
+                self._advance("transit", ts)
+
+        elif self._phase == "raise":
             action = self._move_action(
                 eef_pos, eef_rot, raise_pos, eef_rot, 0.0)
             if at_pose(eef_pos, eef_rot, raise_pos, eef_rot,
@@ -101,6 +134,13 @@ class EEFUninstall(BaseSkill):
                 self._advance("transit", ts)
 
         elif self._phase == "transit":
+            action = self._move_action(
+                eef_pos, eef_rot, transit_pos, ready_rot, 0.0)
+            if at_pose(eef_pos, eef_rot, transit_pos, ready_rot,
+                       self.pos_tolerance, self.rot_tolerance):
+                self._advance("orient_high", ts)
+
+        elif self._phase == "orient_high":
             action = self._move_action(
                 eef_pos, eef_rot, transit_pos, bracket_rot, 0.0)
             if at_pose(eef_pos, eef_rot, transit_pos, bracket_rot,
@@ -203,6 +243,10 @@ class EEFUninstall(BaseSkill):
         task_state["eef"] = "gripper"
         task_state["carried_bite_id"] = None
         task_state["has_acquired_item"] = False
+
+    def _maybe_request_floor_guard_bypass(self, task_state):
+        if self._phase in self.FLOOR_GUARD_BYPASS_PHASES:
+            task_state["tool_floor_guard_bypass"] = True
 
     def _cache_action(self, ts, action):
         self._last_action_ts = ts

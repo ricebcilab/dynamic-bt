@@ -38,9 +38,25 @@ class EEFInstall(BaseSkill):
         lift_distance=0.08,
         close_gripper_speed=-1.0,
         open_gripper_speed=1.0,
+        reset_servo_scoop_angle=270.0,
+        reset_servo_scoop_command=1.0,
+        reset_servo_scoop_tolerance=2.0,
+        reset_servo_twirl_velocity=60.0,
+        reset_servo_twirl_tolerance=3.0,
+        reset_servo_timeout_s=5.0,
+        reset_servo_rest_angles=None,
         **kwargs):
 
         super().__init__()
+        reset_servo_scoop_angle = kwargs.pop(
+            "finish_scoop_angle", reset_servo_scoop_angle)
+        reset_servo_scoop_command = kwargs.pop(
+            "finish_scoop_command", reset_servo_scoop_command)
+        reset_servo_scoop_tolerance = kwargs.pop(
+            "finish_scoop_tolerance", reset_servo_scoop_tolerance)
+        reset_servo_timeout_s = kwargs.pop(
+            "finish_scoop_timeout_s", reset_servo_timeout_s)
+
         self.target_eef = eef
         self.motion_kwargs = {
             "eef_config_path": eef_config_path,
@@ -61,6 +77,13 @@ class EEFInstall(BaseSkill):
             "lift_distance": lift_distance,
             "close_gripper_speed": close_gripper_speed,
             "open_gripper_speed": open_gripper_speed,
+            "reset_servo_scoop_angle": reset_servo_scoop_angle,
+            "reset_servo_scoop_command": reset_servo_scoop_command,
+            "reset_servo_scoop_tolerance": reset_servo_scoop_tolerance,
+            "reset_servo_twirl_velocity": reset_servo_twirl_velocity,
+            "reset_servo_twirl_tolerance": reset_servo_twirl_tolerance,
+            "reset_servo_timeout_s": reset_servo_timeout_s,
+            "reset_servo_rest_angles": reset_servo_rest_angles,
         }
         self.reset()
 
@@ -150,9 +173,25 @@ class _EEFInstallMotion(BaseSkill):
         lift_distance=0.08,
         close_gripper_speed=-1.0,
         open_gripper_speed=1.0,
+        reset_servo_scoop_angle=270.0,
+        reset_servo_scoop_command=1.0,
+        reset_servo_scoop_tolerance=2.0,
+        reset_servo_twirl_velocity=60.0,
+        reset_servo_twirl_tolerance=3.0,
+        reset_servo_timeout_s=5.0,
+        reset_servo_rest_angles=None,
         **kwargs):
 
         super().__init__()
+        reset_servo_scoop_angle = kwargs.pop(
+            "finish_scoop_angle", reset_servo_scoop_angle)
+        reset_servo_scoop_command = kwargs.pop(
+            "finish_scoop_command", reset_servo_scoop_command)
+        reset_servo_scoop_tolerance = kwargs.pop(
+            "finish_scoop_tolerance", reset_servo_scoop_tolerance)
+        reset_servo_timeout_s = kwargs.pop(
+            "finish_scoop_timeout_s", reset_servo_timeout_s)
+
         self.eef = eef
         self.eef_configs = load_eef_configs(eef_config_path)
         self.gain = gain
@@ -165,6 +204,18 @@ class _EEFInstallMotion(BaseSkill):
         self.lift_distance = lift_distance
         self.close_gripper_speed = close_gripper_speed
         self.open_gripper_speed = open_gripper_speed
+        self.reset_servo_scoop_angle = float(reset_servo_scoop_angle)
+        self.reset_servo_scoop_command = float(reset_servo_scoop_command)
+        self.reset_servo_scoop_tolerance = float(reset_servo_scoop_tolerance)
+        self.reset_servo_twirl_velocity = abs(float(reset_servo_twirl_velocity))
+        self.reset_servo_twirl_tolerance = float(reset_servo_twirl_tolerance)
+        self.reset_servo_timeout_s = float(reset_servo_timeout_s)
+        self.reset_servo_rest_angles = {
+            "fork": 180.0,
+            "spoon": 360.0,
+        }
+        if reset_servo_rest_angles is not None:
+            self.reset_servo_rest_angles.update(reset_servo_rest_angles)
         self.reset()
 
     def reset(self):
@@ -264,6 +315,15 @@ class _EEFInstallMotion(BaseSkill):
                 eef_pos, eef_rot, ready_pos, ready_rot, 0.0)
             if at_pose(eef_pos, eef_rot, ready_pos, ready_rot,
                        self.pos_tolerance, self.rot_tolerance):
+                task_state["eef"] = self.eef
+                self._advance("reset_servo", ts)
+
+        elif self._phase == "reset_servo":
+            action = self._reset_servo_action(task_state)
+            if (
+                self._servos_reset(task_state)
+                or self._phase_timed_out(ts, self.reset_servo_timeout_s)
+            ):
                 self._finish(task_state, ts)
 
         else:
@@ -293,6 +353,77 @@ class _EEFInstallMotion(BaseSkill):
         self._last_advance_ts = ts
         self._phase = phase
         self._phase_start_ts = ts
+
+    def _phase_timed_out(self, ts, timeout_s):
+        if self._phase_start_ts is None:
+            self._phase_start_ts = ts
+            return False
+        return (ts - self._phase_start_ts) >= timeout_s * 1e9
+
+    def _reset_servo_action(self, task_state):
+        scoop_cmd = 0.0
+        if not self._scoop_at_reset_angle(task_state):
+            scoop_cmd = self.reset_servo_scoop_command
+        return action9(
+            twirl_cmd=self._twirl_reset_command(task_state),
+            scoop_cmd=scoop_cmd,
+        )
+
+    def _servos_reset(self, task_state):
+        return (
+            self._scoop_at_reset_angle(task_state)
+            and self._twirl_at_reset_angle(task_state)
+        )
+
+    def _scoop_at_reset_angle(self, task_state):
+        try:
+            scoop_angle = float(task_state["scoop"])
+        except (KeyError, TypeError, ValueError):
+            return False
+        if not np.isfinite(scoop_angle):
+            return False
+        return (
+            abs(scoop_angle - self.reset_servo_scoop_angle)
+            <= self.reset_servo_scoop_tolerance
+        )
+
+    def _twirl_reset_command(self, task_state):
+        target = self._twirl_reset_angle()
+        current = self._twirl_angle(task_state)
+        if target is None or current is None:
+            return 0.0
+
+        error = self._signed_angle_error(target, current)
+        if abs(error) <= self.reset_servo_twirl_tolerance:
+            return 0.0
+        return np.sign(error) * self.reset_servo_twirl_velocity
+
+    def _twirl_at_reset_angle(self, task_state):
+        target = self._twirl_reset_angle()
+        current = self._twirl_angle(task_state)
+        if target is None or current is None:
+            return True
+        error = self._signed_angle_error(target, current)
+        return abs(error) <= self.reset_servo_twirl_tolerance
+
+    def _twirl_reset_angle(self):
+        if self.eef not in self.reset_servo_rest_angles:
+            return None
+        return float(self.reset_servo_rest_angles[self.eef]) % 360.0
+
+    @staticmethod
+    def _twirl_angle(task_state):
+        try:
+            angle = float(task_state["twirl_angle"])
+        except (KeyError, TypeError, ValueError):
+            return None
+        if not np.isfinite(angle):
+            return None
+        return angle % 360.0
+
+    @staticmethod
+    def _signed_angle_error(target, current):
+        return ((float(target) - float(current) + 180.0) % 360.0) - 180.0
 
     def _finish(self, task_state, ts):
         if ts == self._last_advance_ts:

@@ -182,14 +182,15 @@ class DynamicBT:
     def state(self) -> str:
         """Current state name."""
         return self.current_state
+    
+    @property
+    def is_admin_mode(self) -> bool:
+        """True when the current state is marked as an admin state."""
+        return bool(self._states[self.current_state].admin)
 
     def get_state(self):
         """Return the current state name (legacy alias for ``self.state``)."""
         return self.current_state
-
-    def is_in_admin_state(self) -> bool:
-        """True when the current state is marked as an admin state."""
-        return bool(self._states[self.current_state].admin)
 
     def handle_event(self, event_name: str) -> bool:
         """Apply a control-only event transition from the current state.

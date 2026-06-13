@@ -377,7 +377,7 @@ class _EEFInstallMotion(BaseSkill):
 
     def _scoop_at_reset_angle(self, task_state):
         try:
-            scoop_angle = float(task_state["scoop"])
+            scoop_angle = float(task_state["scoop_angle"])
         except (KeyError, TypeError, ValueError):
             return False
         if not np.isfinite(scoop_angle):

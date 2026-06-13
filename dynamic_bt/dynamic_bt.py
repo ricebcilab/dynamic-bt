@@ -201,9 +201,7 @@ class DynamicBT:
                 continue
 
             prev = self.current_state
-            self.message = {}
-            self.current_state = edge.to_state
-            self._activate_edges()
+            self._transition_to(edge.to_state, {})
             logging.info(
                 "Event transition: %s -[%s]-> %s",
                 prev, event_name, self.current_state)
@@ -271,13 +269,8 @@ class DynamicBT:
                 skill_name = type(edge.skill).__name__
 
                 # Capture message from completed skill
-                if edge.pass_message:
-                    self.message = edge.skill.message.copy()
-                else:
-                    self.message = {}
-
-                self.current_state = edge.to_state
-                self._activate_edges()
+                message = edge.skill.message.copy() if edge.pass_message else {}
+                self._transition_to(edge.to_state, message)
 
                 if self._completion_skill and skill_name == self._completion_skill:
                     self.is_complete = True
@@ -293,17 +286,14 @@ class DynamicBT:
             logging.warning(
                 "Invariant violated in '%s', fallback to '%s'",
                 self.current_state, state_def.fallback)
-            self.current_state = state_def.fallback
-            self._activate_edges()
+            self._transition_to(state_def.fallback, self.message)
             return
 
     def reset(self, *args, **kwargs):
         """Reset to initial state and reactivate edges."""
-        self.current_state = self._initial_state
         if self._completion_skill is not None:
             self.is_complete = False
-        self.message = {}
-        self._activate_edges()
+        self._transition_to(self._initial_state, {})
 
     def update_scene_info(self, food_json):
         """Push dynamic object config to all skills that support it."""
@@ -317,6 +307,12 @@ class DynamicBT:
     # ------------------------------------------------------------------
     # Internal
     # ------------------------------------------------------------------
+
+    def _transition_to(self, to_state: str, message: dict) -> None:
+        """Move to ``to_state``, set the outgoing message, and reactivate edges."""
+        self.message = message
+        self.current_state = to_state
+        self._activate_edges()
 
     def _activate_edges(self):
         """Load outgoing edges for current state, reset skills, inject message."""

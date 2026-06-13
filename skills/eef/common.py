@@ -48,8 +48,8 @@ def clearance_z(bracket, positions, default_offset=0.08):
 
 
 def scoop_angle_deg(task_state, default=270.0):
-    if "scoop" in task_state:
-        return float(task_state["scoop"])
+    if "scoop_angle" in task_state:
+        return float(task_state["scoop_angle"])
     return float(task_state.get("fork_scoop", default))
 
 

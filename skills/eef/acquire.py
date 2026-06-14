@@ -38,6 +38,7 @@ class Acquire(BaseSkill):
         self._index = 0
         self._tgt_id = None
         self._eef = None
+        self._acquired = False
         self._missing_recipe_warned = set()
 
     def reset(self):
@@ -46,12 +47,15 @@ class Acquire(BaseSkill):
         self._index = 0
         self._tgt_id = None
         self._eef = None
+        self._acquired = False
 
     @property
     def message(self):
         msg = super().message
         if self._tgt_id is not None:
             msg["tgt_id"] = self._tgt_id
+        if self._acquired and self._tgt_id is not None:
+            msg["carried_bite_id"] = self._tgt_id
         return msg
 
     def get_action(self, task_state):
@@ -72,7 +76,7 @@ class Acquire(BaseSkill):
             return False
 
         if self._index >= len(self._sequence):
-            self._mark_acquired(task_state)
+            self._mark_acquired()
             return True
 
         skill = self._sequence[self._index]
@@ -84,7 +88,7 @@ class Acquire(BaseSkill):
             self._sequence[self._index].received_message = self.message.copy()
             return False
 
-        self._mark_acquired(task_state)
+        self._mark_acquired()
         return True
 
     def _ensure_sequence(self, task_state):
@@ -143,9 +147,9 @@ class Acquire(BaseSkill):
             return bool(task_state.get("is_grasping", False))
         return bool(skill.is_complete(task_state))
 
-    def _mark_acquired(self, task_state):
+    def _mark_acquired(self):
         if self._tgt_id is not None:
-            task_state["carried_bite_id"] = self._tgt_id
+            self._acquired = True
 
     def _warn_missing_recipe(self, tgt_id, eef):
         key = (tgt_id, eef)

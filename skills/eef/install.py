@@ -128,6 +128,15 @@ class EEFInstall(BaseSkill):
         self._maybe_build_sequence(task_state)
         return self._done
 
+    @property
+    def message(self):
+        # Forward the active (or last) sub-skill's effect keys to the FSM
+        msg = super().message
+        if self._sequence:
+            idx = min(self._index, len(self._sequence) - 1)
+            msg.update(self._sequence[idx].message)
+        return msg
+
     def _maybe_build_sequence(self, task_state):
         if self._sequence is not None:
             return
@@ -224,7 +233,15 @@ class _EEFInstallMotion(BaseSkill):
         self._phase = "close"
         self._phase_start_ts = None
         self._done = False
+        self._eef_committed = False
         self._last_advance_ts = None
+
+    @property
+    def message(self):
+        msg = super().message
+        if self._eef_committed:
+            msg["eef"] = self.eef
+        return msg
 
     def get_action(self, task_state):
         self._ensure_initialized()
@@ -315,7 +332,7 @@ class _EEFInstallMotion(BaseSkill):
                 eef_pos, eef_rot, ready_pos, ready_rot, 0.0)
             if at_pose(eef_pos, eef_rot, ready_pos, ready_rot,
                        self.pos_tolerance, self.rot_tolerance):
-                task_state["eef"] = self.eef
+                self._eef_committed = True
                 self._advance("reset_servo", ts)
 
         elif self._phase == "reset_servo":
@@ -429,7 +446,7 @@ class _EEFInstallMotion(BaseSkill):
         if ts == self._last_advance_ts:
             return
         self._last_advance_ts = ts
-        task_state["eef"] = self.eef
+        self._eef_committed = True
         self._phase = "done"
         self._done = True
         logging.info("EEF '%s' installed", self.eef)

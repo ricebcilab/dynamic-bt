@@ -88,7 +88,7 @@ class DynamicBT:
         self.current_state: str = self._initial_state
         if self._completion_skill is not None:
             self.is_complete: bool = False
-        self.message = {}  # message from last completed skill
+        self._message = {}  # forwarded message from the last completed skill
 
         self._warned_skill: set[str] = set()
         self._active_edges: list[_Edge] = []
@@ -188,6 +188,20 @@ class DynamicBT:
         """True when the current state is marked as an admin state."""
         return bool(self._states[self.current_state].admin)
 
+    @property
+    def message(self) -> dict:
+        """Current message surfaced to consumers and the FSM.
+
+        Union of the forwarded message (from the last completed skill) and the
+        executing skill's live message; the executing skill takes precedence.
+        Carries skill effect keys (``eef``, ``carried_bite_id``,
+        ``request_home``, ``disable_floor_guard``) for the FSM to apply.
+        """
+        msg = dict(self._message)
+        if self._active_edges and self._active_edges[0].skill is not None:
+            msg.update(self._active_edges[0].skill.message)
+        return msg
+
     def get_state(self):
         """Return the current state name (legacy alias for ``self.state``)."""
         return self.current_state
@@ -210,24 +224,32 @@ class DynamicBT:
 
         return False
 
-    def get_action(self, task_state) -> np.ndarray:
-        """Return a single action (num_dof) for the first active edge's skill."""
+    def get_action(self, task_state) -> tuple[np.ndarray, dict]:
+        """Return (action, message) for the first active edge's skill.
+
+        The message carries the skill's effect keys (e.g. ``eef``,
+        ``carried_bite_id``, ``request_home``, ``disable_floor_guard``) for the
+        FSM to apply; skills never mutate ``task_state`` themselves.
+        """
         state_def = self._states[self.current_state]
         idle = state_def.idle_action
 
         if not state_def.check_invariant(task_state) or not self._active_edges:
             if idle:
-                return self._fit_action(np.array(idle), skill_name="idle")
-            return np.zeros(self.num_dof)
+                action = self._fit_action(np.array(idle), skill_name="idle")
+            else:
+                action = np.zeros(self.num_dof)
+            return action, self.message
 
         skill = self._active_edges[0].skill
         try:
             raw_action = skill.get_action(task_state)
         except KeyError:
             logging.warning("Failed to get action from active skill")
-            return np.zeros(self.num_dof)
+            return np.zeros(self.num_dof), self.message
 
-        return self._fit_action(raw_action, skill_name=type(skill).__name__)
+        action = self._fit_action(raw_action, skill_name=type(skill).__name__)
+        return action, self.message
 
     def get_candidate_actions(self, task_state) -> dict[str, np.ndarray]:
         """Return all candidate actions for SA blending.
@@ -278,7 +300,7 @@ class DynamicBT:
 
                 logging.info(
                     "Transition: %s -[%s]-> %s (message=%s)",
-                    prev, skill_name, self.current_state, self.message)
+                    prev, skill_name, self.current_state, self._message)
                 return
 
         # Check state invariant (fallback on violation)
@@ -287,7 +309,7 @@ class DynamicBT:
             logging.warning(
                 "Invariant violated in '%s', fallback to '%s'",
                 self.current_state, state_def.fallback)
-            self._transition_to(state_def.fallback, self.message)
+            self._transition_to(state_def.fallback, self._message)
             return
 
     def reset(self, *args, **kwargs):
@@ -310,8 +332,8 @@ class DynamicBT:
     # ------------------------------------------------------------------
 
     def _transition_to(self, to_state: str, message: dict) -> None:
-        """Move to ``to_state``, set the outgoing message, and reactivate edges."""
-        self.message = message
+        """Move to ``to_state``, set the forwarded message, and reactivate edges."""
+        self._message = message
         self.current_state = to_state
         self._activate_edges()
 
@@ -322,7 +344,7 @@ class DynamicBT:
             if e.from_state == self.current_state and e.trigger is None
         ]
         for edge in self._active_edges:
-            edge.skill.received_message = self.message.copy()
+            edge.skill.received_message = self._message.copy()
             edge.skill.reset()
 
     def _fit_action(self, raw_action: np.ndarray, skill_name: str) -> np.ndarray:

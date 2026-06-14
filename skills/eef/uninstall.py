@@ -64,14 +64,30 @@ class EEFUninstall(BaseSkill):
         self._phase = "home" if self.home_first else "raise"
         self._phase_start_ts = None
         self._done = False
+        self._uninstalled = False
         self._last_action_ts = None
         self._last_action = None
         self._last_advance_ts = None
 
+    @property
+    def message(self):
+        # Surface uninstall effects to the FSM via the message buffer
+        msg = super().message
+        if self._uninstalled:
+            msg["eef"] = "gripper"
+            msg["carried_bite_id"] = None
+        if self._phase in self.FLOOR_GUARD_BYPASS_PHASES:
+            msg["disable_floor_guard"] = True
+        if self._phase == "home" and not self._done:
+            msg["request_home"] = {
+                "scoop_up": self.home_scoop_command < 0.0,
+                "timeout": self.home_timeout_s,
+            }
+        return msg
+
     def get_action(self, task_state):
         ts = task_state.get("ts", 0)
         if self._last_action_ts == ts and self._last_action is not None:
-            self._maybe_request_floor_guard_bypass(task_state)
             return self._last_action.copy()
 
         self._ensure_initialized(task_state)
@@ -79,7 +95,6 @@ class EEFUninstall(BaseSkill):
             action = np.zeros(9, dtype=np.float32)
             self._cache_action(ts, action)
             return action
-        self._maybe_request_floor_guard_bypass(task_state)
 
         bracket_pos, bracket_rot, slide_axis, slide_distance = bracket_pose(
             self._bracket)
@@ -105,7 +120,7 @@ class EEFUninstall(BaseSkill):
 
         if self._phase == "home":
             action = action9(scoop_cmd=self.home_scoop_command)
-            result = task_state.pop("eef_admin_home_result", None)
+            result = task_state.get("eef_home_result")
             if result == "done":
                 self._advance("move_ready", ts)
             elif result == "failed":
@@ -113,11 +128,7 @@ class EEFUninstall(BaseSkill):
                     "Failed to move Home before uninstalling EEF '%s'",
                     self._active_eef)
                 self._done = True
-            else:
-                task_state["eef_admin_home_request"] = {
-                    "scoop_up": self.home_scoop_command < 0.0,
-                    "timeout": self.home_timeout_s,
-                }
+            # Otherwise the message buffer emits request_home for the FSM
 
         elif self._phase == "move_ready":
             action = self._move_action(
@@ -173,7 +184,7 @@ class EEFUninstall(BaseSkill):
             if self._phase_start_ts is None:
                 self._phase_start_ts = ts
             if (ts - self._phase_start_ts) >= self.close_duration_s * 1e9:
-                self._mark_uninstalled(task_state)
+                self._mark_uninstalled()
                 self._advance("lift", ts)
 
         elif self._phase == "lift":
@@ -234,19 +245,13 @@ class EEFUninstall(BaseSkill):
         if ts == self._last_advance_ts:
             return
         self._last_advance_ts = ts
-        self._mark_uninstalled(task_state)
+        self._mark_uninstalled()
         self._phase = "done"
         self._done = True
         logging.info("EEF '%s' uninstalled", self._active_eef)
 
-    def _mark_uninstalled(self, task_state):
-        task_state["eef"] = "gripper"
-        task_state["carried_bite_id"] = None
-        task_state["has_acquired_item"] = False
-
-    def _maybe_request_floor_guard_bypass(self, task_state):
-        if self._phase in self.FLOOR_GUARD_BYPASS_PHASES:
-            task_state["tool_floor_guard_bypass"] = True
+    def _mark_uninstalled(self):
+        self._uninstalled = True
 
     def _cache_action(self, ts, action):
         self._last_action_ts = ts

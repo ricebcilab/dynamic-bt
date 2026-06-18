@@ -31,6 +31,7 @@ class _State:
     invariant: str | None = None
     fallback: str | None = None
     idle_action: list[float] | None = None
+    admin: bool = False
 
     def check_invariant(self, task_state: dict) -> bool:
         """True if the invariant holds or there is none."""
@@ -47,8 +48,9 @@ class _Edge:
     """A connection from one state to another, driven by a skill."""
     from_state: str
     to_state: str
-    skill: object = field(default=None)
+    skill: object | None = field(default=None)
     pass_message: bool = True  # forward completed skill's message to next skill
+    trigger: str | None = None
 
 
 # ------------------------------------------------------------------
@@ -86,13 +88,17 @@ class DynamicBT:
         self.current_state: str = self._initial_state
         if self._completion_skill is not None:
             self.is_complete: bool = False
-        self.message = {}  # message from last completed skill
+        self._message = {}  # forwarded message from the last completed skill
 
         self._warned_skill: set[str] = set()
         self._active_edges: list[_Edge] = []
         self._activate_edges()
 
-        skill_names = [type(e.skill).__name__ for e in self._edges]
+        skill_names = [
+            f"trigger:{e.trigger}" if e.trigger is not None
+            else type(e.skill).__name__
+            for e in self._edges
+        ]
         logging.info(
             "DynamicBT initialized  state=%s  skills=%s",
             self.current_state, skill_names)
@@ -114,26 +120,42 @@ class DynamicBT:
 
         edges = []
         for edef in raw.get("edges", []):
-            # Build skill instance
-            skill_cfg = dict(edef.get("skill", {}))
-            skill_cls = getattr(_skills, skill_cfg.pop("class"))
-            skill = skill_cls(**skill_cfg, **skill_kwargs)
+            trigger = edef.get("trigger")
+            has_skill = "skill" in edef
+            if trigger is not None and has_skill:
+                raise ValueError("Trigger edges are control-only and cannot define a skill")
 
-            # Build criteria list and attach to skill
-            criteria_raw = edef.get("criteria", [])
-            if isinstance(criteria_raw, dict):
-                criteria_raw = [criteria_raw]
-            for cdef in criteria_raw:
-                cdef = dict(cdef)
-                criteria_cls = getattr(_criteria, cdef.pop("class"))
-                input_map = cdef.pop("inputs", {})
-                skill.criteria.append((criteria_cls(**cdef), input_map))
+            skill = None
+            if has_skill:
+                # Build skill instance
+                skill_cfg = dict(edef.get("skill", {}))
+                skill_name = skill_cfg.pop("class")
+                skill_cls = _skills.SKILL_REGISTRY.get(skill_name)
+                if skill_cls is None:
+                    skill_cls = getattr(_skills, skill_name)
+                skill = skill_cls(**skill_cfg, **skill_kwargs)
+
+                # Build criteria list and attach to skill
+                criteria_raw = edef.get("criteria", [])
+                if isinstance(criteria_raw, dict):
+                    criteria_raw = [criteria_raw]
+                for cdef in criteria_raw:
+                    cdef = dict(cdef)
+                    criteria_cls = getattr(_criteria, cdef.pop("class"))
+                    input_map = cdef.pop("inputs", {})
+                    skill.criteria.append((criteria_cls(**cdef), input_map))
+            elif trigger is None:
+                raise ValueError("Edges must define either a skill or a trigger")
+
+            if trigger is not None and "criteria" in edef:
+                raise ValueError("Trigger edges are control-only and cannot define criteria")
 
             edges.append(_Edge(
                 from_state=edef["from_state"],
                 to_state=edef["to_state"],
                 skill=skill,
                 pass_message=edef.get("pass_message", True),
+                trigger=trigger,
             ))
 
         # Validate
@@ -160,29 +182,74 @@ class DynamicBT:
     def state(self) -> str:
         """Current state name."""
         return self.current_state
+    
+    @property
+    def is_admin_mode(self) -> bool:
+        """True when the current state is marked as an admin state."""
+        return bool(self._states[self.current_state].admin)
+
+    @property
+    def message(self) -> dict:
+        """Current message surfaced to consumers and the FSM.
+
+        Union of the forwarded message (from the last completed skill) and the
+        executing skill's live message; the executing skill takes precedence.
+        Carries skill effect keys (``eef``, ``carried_bite_id``,
+        ``request_home``, ``disable_floor_guard``) for the FSM to apply.
+        """
+        msg = dict(self._message)
+        if self._active_edges and self._active_edges[0].skill is not None:
+            msg.update(self._active_edges[0].skill.message)
+        return msg
 
     def get_state(self):
         """Return the current state name (legacy alias for ``self.state``)."""
         return self.current_state
 
-    def get_action(self, task_state) -> np.ndarray:
-        """Return a single action (num_dof) for the first active edge's skill."""
+    def handle_event(self, event_name: str) -> bool:
+        """Apply a control-only event transition from the current state.
+
+        Returns True when an edge consumed the event and changed state.
+        """
+        for edge in self._edges:
+            if edge.from_state != self.current_state or edge.trigger != event_name:
+                continue
+
+            prev = self.current_state
+            self._transition_to(edge.to_state, {})
+            logging.info(
+                "Event transition: %s -[%s]-> %s",
+                prev, event_name, self.current_state)
+            return True
+
+        return False
+
+    def get_action(self, task_state) -> tuple[np.ndarray, dict]:
+        """Return (action, message) for the first active edge's skill.
+
+        The message carries the skill's effect keys (e.g. ``eef``,
+        ``carried_bite_id``, ``request_home``, ``disable_floor_guard``) for the
+        FSM to apply; skills never mutate ``task_state`` themselves.
+        """
         state_def = self._states[self.current_state]
         idle = state_def.idle_action
 
         if not state_def.check_invariant(task_state) or not self._active_edges:
             if idle:
-                return self._fit_action(np.array(idle), skill_name="idle")
-            return np.zeros(self.num_dof)
+                action = self._fit_action(np.array(idle), skill_name="idle")
+            else:
+                action = np.zeros(self.num_dof)
+            return action, self.message
 
         skill = self._active_edges[0].skill
         try:
             raw_action = skill.get_action(task_state)
         except KeyError:
             logging.warning("Failed to get action from active skill")
-            return np.zeros(self.num_dof)
+            return np.zeros(self.num_dof), self.message
 
-        return self._fit_action(raw_action, skill_name=type(skill).__name__)
+        action = self._fit_action(raw_action, skill_name=type(skill).__name__)
+        return action, self.message
 
     def get_candidate_actions(self, task_state) -> dict[str, np.ndarray]:
         """Return all candidate actions for SA blending.
@@ -225,20 +292,15 @@ class DynamicBT:
                 skill_name = type(edge.skill).__name__
 
                 # Capture message from completed skill
-                if edge.pass_message:
-                    self.message = edge.skill.message.copy()
-                else:
-                    self.message = {}
-
-                self.current_state = edge.to_state
-                self._activate_edges()
+                message = edge.skill.message.copy() if edge.pass_message else {}
+                self._transition_to(edge.to_state, message)
 
                 if self._completion_skill and skill_name == self._completion_skill:
                     self.is_complete = True
 
                 logging.info(
                     "Transition: %s -[%s]-> %s (message=%s)",
-                    prev, skill_name, self.current_state, self.message)
+                    prev, skill_name, self.current_state, self._message)
                 return
 
         # Check state invariant (fallback on violation)
@@ -247,17 +309,14 @@ class DynamicBT:
             logging.warning(
                 "Invariant violated in '%s', fallback to '%s'",
                 self.current_state, state_def.fallback)
-            self.current_state = state_def.fallback
-            self._activate_edges()
+            self._transition_to(state_def.fallback, self._message)
             return
 
     def reset(self, *args, **kwargs):
         """Reset to initial state and reactivate edges."""
-        self.current_state = self._initial_state
         if self._completion_skill is not None:
             self.is_complete = False
-        self.message = {}
-        self._activate_edges()
+        self._transition_to(self._initial_state, {})
 
     def update_scene_info(self, food_json):
         """Push dynamic object config to all skills that support it."""
@@ -272,13 +331,20 @@ class DynamicBT:
     # Internal
     # ------------------------------------------------------------------
 
+    def _transition_to(self, to_state: str, message: dict) -> None:
+        """Move to ``to_state``, set the forwarded message, and reactivate edges."""
+        self._message = message
+        self.current_state = to_state
+        self._activate_edges()
+
     def _activate_edges(self):
         """Load outgoing edges for current state, reset skills, inject message."""
         self._active_edges = [
-            e for e in self._edges if e.from_state == self.current_state
+            e for e in self._edges
+            if e.from_state == self.current_state and e.trigger is None
         ]
         for edge in self._active_edges:
-            edge.skill.received_message = self.message.copy()
+            edge.skill.received_message = self._message.copy()
             edge.skill.reset()
 
     def _fit_action(self, raw_action: np.ndarray, skill_name: str) -> np.ndarray:

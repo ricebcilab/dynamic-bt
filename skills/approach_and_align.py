@@ -23,6 +23,7 @@ class ApproachAndAlign(BaseSkill):
         self, obj_cfg_path=None, 
         gain=1.0, max_linear_speed=0.3, max_angular_speed=1.0, 
         approach_offset=0.03, safe_dist=0.10, repulsive_gain=0.5, 
+        tool_tip_vertical_offset=0.297, tool_scoop_command=1.0,
         **kwargs):
         
         super().__init__()
@@ -33,6 +34,8 @@ class ApproachAndAlign(BaseSkill):
         self.approach_offset = approach_offset
         self.safe_dist = safe_dist
         self.repulsive_gain = repulsive_gain
+        self.tool_tip_vertical_offset = float(tool_tip_vertical_offset)
+        self.tool_scoop_command = float(tool_scoop_command)
 
         if obj_cfg_path:
             with open(obj_cfg_path, 'r') as f:
@@ -44,13 +47,20 @@ class ApproachAndAlign(BaseSkill):
         eef_pos = task_state['eef_pos']
         eef_rot = R.from_quat(task_state['eef_quat'])
         tgt_id = task_state['tgt_id']
+        if not self._is_compatible(tgt_id, task_state):
+            return np.zeros(7)
+
         obj_pos = task_state['obj_pos'][tgt_id]
         obj_quat = task_state['obj_quat'][tgt_id]
         obj_bbox = task_state['obj_bbox'][tgt_id]
 
         target_pos = obj_pos.copy()
         target_pos[2] = obj_bbox[5] + self.approach_offset
-        target_rot = self._grasp_orientation(eef_rot, obj_quat, tgt_id)
+        if self._is_installed_tool(task_state):
+            target_pos[2] += self.tool_tip_vertical_offset
+            target_rot = eef_rot
+        else:
+            target_rot = self._grasp_orientation(eef_rot, obj_quat, tgt_id)
         twist = self._compute_twist(eef_pos, eef_rot, target_pos, target_rot)
 
         # APF collision avoidance (exclude target object)
@@ -66,16 +76,57 @@ class ApproachAndAlign(BaseSkill):
                 [0.0, 0.0, abs(np.dot(twist[:3], apf))])
         twist[:3] += apf
 
+        if self._is_installed_tool(task_state):
+            action = np.zeros(9, dtype=np.float32)
+            action[:6] = twist
+            action[8] = self.tool_scoop_command
+            return action
+
         return np.concatenate([twist, [1.0]])  # gripper open
 
+    def is_complete(self, task_state):
+        filtered = task_state.copy()
+        filtered['obj_bbox'] = {
+            oid: bbox for oid, bbox in task_state['obj_bbox'].items()
+            if self._is_compatible(oid, task_state)
+        }
+        if self._is_installed_tool(task_state):
+            filtered['eef_pos'] = self._tool_tip_pos(task_state)
+        return super().is_complete(filtered)
+
     def get_candidates(self, task_state):
-        """One candidate per object, keyed by object ID."""
+        """One candidate per compatible object, keyed by object ID."""
         candidates = {}
         for oid in task_state['obj_pos'].keys():
+            if not self._is_compatible(oid, task_state):
+                continue
             assumed = task_state.copy()
             assumed['tgt_id'] = oid
             candidates[str(oid)] = self.get_action(assumed)
         return candidates if candidates else None
+
+    def _is_compatible(self, oid, task_state):
+        if not self.food_json:
+            return True
+
+        cfg = self.food_json.get(str(oid))
+        if cfg is None:
+            return True
+
+        compatible_eefs = cfg.get('compatible_eefs')
+        if compatible_eefs is None:
+            return True
+
+        return task_state.get('eef', 'gripper') in compatible_eefs
+
+    @staticmethod
+    def _is_installed_tool(task_state):
+        return task_state.get('eef', 'gripper') in {'fork', 'spoon'}
+
+    def _tool_tip_pos(self, task_state):
+        pos = np.asarray(task_state['eef_pos'], dtype=np.float64).copy()
+        pos[2] -= self.tool_tip_vertical_offset
+        return pos
 
     # ------------------------------------------------------------------
     # Grasp orientation

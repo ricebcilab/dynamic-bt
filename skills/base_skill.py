@@ -4,6 +4,7 @@ import numpy as np
 from abc import ABC, abstractmethod
 
 EPS = 1e-6
+SKILL_REGISTRY = {}
 
 
 class BaseSkill(ABC):
@@ -20,6 +21,11 @@ class BaseSkill(ABC):
     WORLD_X = np.array([1.0, 0.0, 0.0])
     WORLD_Y = np.array([0.0, 1.0, 0.0])
     WORLD_Z = np.array([0.0, 0.0, 1.0])
+
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        if not getattr(cls, "__abstractmethods__", None):
+            SKILL_REGISTRY[cls.__name__] = cls
 
     def __init__(self, **kwargs):
         self.criteria = []  # list of (criteria_obj, input_mapping)

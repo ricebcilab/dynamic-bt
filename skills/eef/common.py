@@ -70,6 +70,54 @@ def tool_tip_contact_eef_z(
     )
 
 
+def tool_tip_offset_webapp(
+    task_state,
+    gripper_to_scoop_servo=0.115,
+    scoop_to_twirl_servo=0.055,
+    twirl_to_tool_tip=0.190,
+    default_scoop_angle_deg=270.0,
+):
+    """Fork/spoon target offset in Kinova webapp tool-frame axes.
+
+    Twirl angle is intentionally ignored: for the current utensil geometry,
+    the target point is treated as lying on the twirl axis.
+    """
+    angle = scoop_angle_deg(task_state, default=default_scoop_angle_deg)
+    theta = np.deg2rad(angle - 180.0)
+    return np.array([
+        -float(scoop_to_twirl_servo),
+        float(twirl_to_tool_tip) * np.cos(theta),
+        -float(gripper_to_scoop_servo)
+        - float(twirl_to_tool_tip) * np.sin(theta),
+    ], dtype=np.float64)
+
+
+def tool_tip_pos(
+    task_state,
+    gripper_to_scoop_servo=0.115,
+    scoop_to_twirl_servo=0.055,
+    twirl_to_tool_tip=0.190,
+    default_scoop_angle_deg=270.0,
+):
+    """Estimate utensil target position in world coordinates.
+
+    The measured offset is expressed in Kinova webapp tool-frame axes at the
+    current EEF pose. ``eef_quat`` stores the internal frame rotation, so this
+    converts it back to the webapp-frame rotation before applying the offset.
+    """
+    eef_pos = np.asarray(task_state["eef_pos"], dtype=np.float64)
+    eef_rot = R.from_quat(task_state["eef_quat"])
+    webapp_rot = eef_rot * KINOVA_WEBAPP_TO_INTERNAL.inv()
+    offset = tool_tip_offset_webapp(
+        task_state,
+        gripper_to_scoop_servo=gripper_to_scoop_servo,
+        scoop_to_twirl_servo=scoop_to_twirl_servo,
+        twirl_to_tool_tip=twirl_to_tool_tip,
+        default_scoop_angle_deg=default_scoop_angle_deg,
+    )
+    return eef_pos + webapp_rot.apply(offset)
+
+
 def tool_tip_clearance(
     task_state,
     gripper_to_scoop_servo=0.13,

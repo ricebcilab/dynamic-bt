@@ -45,6 +45,9 @@ class EEFInstall(BaseSkill):
         reset_servo_twirl_tolerance=3.0,
         reset_servo_timeout_s=5.0,
         reset_servo_rest_angles=None,
+        home_first=True,
+        home_timeout_s=None,
+        home_scoop_command=0.0,
         **kwargs):
 
         super().__init__()
@@ -84,6 +87,9 @@ class EEFInstall(BaseSkill):
             "reset_servo_twirl_tolerance": reset_servo_twirl_tolerance,
             "reset_servo_timeout_s": reset_servo_timeout_s,
             "reset_servo_rest_angles": reset_servo_rest_angles,
+            "home_first": home_first,
+            "home_timeout_s": home_timeout_s,
+            "home_scoop_command": home_scoop_command,
         }
         self.reset()
 
@@ -189,6 +195,9 @@ class _EEFInstallMotion(BaseSkill):
         reset_servo_twirl_tolerance=3.0,
         reset_servo_timeout_s=5.0,
         reset_servo_rest_angles=None,
+        home_first=True,
+        home_timeout_s=None,
+        home_scoop_command=0.0,
         **kwargs):
 
         super().__init__()
@@ -225,12 +234,15 @@ class _EEFInstallMotion(BaseSkill):
         }
         if reset_servo_rest_angles is not None:
             self.reset_servo_rest_angles.update(reset_servo_rest_angles)
+        self.home_first = bool(home_first)
+        self.home_timeout_s = home_timeout_s
+        self.home_scoop_command = float(home_scoop_command)
         self.reset()
 
     def reset(self):
         super().reset()
         self._bracket = None
-        self._phase = "close"
+        self._phase = "home" if self.home_first else "close"
         self._phase_start_ts = None
         self._done = False
         self._eef_committed = False
@@ -241,6 +253,11 @@ class _EEFInstallMotion(BaseSkill):
         msg = super().message
         if self._eef_committed:
             msg["eef"] = self.eef
+        if self._phase == "home" and not self._done:
+            msg["request_home"] = {
+                "scoop_up": self.home_scoop_command < 0.0,
+                "timeout": self.home_timeout_s,
+            }
         return msg
 
     def get_action(self, task_state):
@@ -271,7 +288,19 @@ class _EEFInstallMotion(BaseSkill):
             default_frame=self._bracket.get("rot_frame", "internal"),
         )
 
-        if self._phase == "close":
+        if self._phase == "home":
+            action = action9(scoop_cmd=self.home_scoop_command)
+            result = task_state.get("eef_home_result")
+            if result == "done":
+                self._advance("close", ts)
+            elif result == "failed":
+                logging.error(
+                    "Failed to move Home before installing EEF '%s'",
+                    self.eef)
+                self._done = True
+            # Otherwise the message buffer emits request_home for the FSM
+
+        elif self._phase == "close":
             action = action9(gripper_speed=self.close_gripper_speed)
             if self._phase_start_ts is None:
                 self._phase_start_ts = ts

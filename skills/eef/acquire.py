@@ -21,12 +21,16 @@ class Acquire(BaseSkill):
         self,
         obj_cfg_path=None,
         default_gripper_recipe=("DescendAndGrasp",),
+        attach_on=None,
         **kwargs,
     ):
         super().__init__()
 
         self._skill_kwargs = dict(kwargs)
         self._default_gripper_recipe = tuple(default_gripper_recipe)
+        # Publish carried_bite_id as soon as this recipe skill completes
+        # (e.g. "Stab": the bite is on the fork before Scoop/Twirl run)
+        self._attach_on = None if attach_on is None else str(attach_on)
 
         if obj_cfg_path:
             with open(obj_cfg_path, "r", encoding="utf-8") as f:
@@ -83,6 +87,9 @@ class Acquire(BaseSkill):
         if not self._skill_complete(skill, task_state):
             return False
 
+        if (self._attach_on is not None
+                and type(skill).__name__ == self._attach_on):
+            self._mark_acquired()
         self._index += 1
         if self._index < len(self._sequence):
             self._sequence[self._index].received_message = self.message.copy()

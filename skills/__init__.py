@@ -5,4 +5,4 @@ from .descend_and_grasp_recovery import DescendAndGraspRecovery
 from .retract_object import RetractObject
 from .place_and_release import PlaceAndRelease
 from .retreat import Retreat
-from .eef import Acquire, Stab, Twirl, Scoop, EEFInstall, EEFUninstall
+from .eef import Acquire, Stab, Twirl, Scoop, EEFInstall, EEFUninstall, ToolApproach, ToolPresent

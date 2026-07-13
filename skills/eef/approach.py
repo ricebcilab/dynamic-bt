@@ -1,30 +1,35 @@
-"""Skill: move and orient EEF to a pre-grasp hover above the target object.
+"""Skill: move an installed utensil's tip to a pre-acquisition hover.
 
-Computes a unified twist from the configuration error between the current
-EEF pose and a target pose hovering above the object's top face in a
-grasp-ready orientation. APF collision avoidance is integrated.
+Tool-only counterpart of the bare-gripper ApproachAndAlign: aims the tracked
+tool tip (not the wrist) at a hover point above the target's top face while
+keeping the utensil orientation, with APF collision avoidance.
 """
 
 import json
 import numpy as np
 from scipy.spatial.transform import Rotation as R
 
-from .base_skill import BaseSkill
+from ..base_skill import BaseSkill
 
 
-class ApproachAndAlign(BaseSkill):
-    """Move + orient EEF to pre-grasp hover above target, with APF.
+class ToolApproach(BaseSkill):
+    """Move the tool tip to a hover above the target, with APF.
 
     Params: gain, max_linear_speed, max_angular_speed, approach_offset,
-            safe_dist, repulsive_gain
+            safe_dist, repulsive_gain, tool_tip_vertical_offset (fallback tip
+            drop when no tracked tip is available), tool_scoop_command,
+            hold_orientation (regulate toward the orientation captured at
+            skill start instead of re-anchoring to the drifting pose)
     """
 
     def __init__(
-        self, obj_cfg_path=None, 
-        gain=1.0, max_linear_speed=0.3, max_angular_speed=1.0, 
-        approach_offset=0.03, safe_dist=0.10, repulsive_gain=0.5, 
+        self, obj_cfg_path=None,
+        gain=1.0, max_linear_speed=0.3, max_angular_speed=1.0,
+        approach_offset=0.03, safe_dist=0.10, repulsive_gain=0.5,
+        tool_tip_vertical_offset=0.297, tool_scoop_command=1.0,
+        hold_orientation=False,
         **kwargs):
-        
+
         super().__init__()
 
         self.gain = gain
@@ -33,6 +38,10 @@ class ApproachAndAlign(BaseSkill):
         self.approach_offset = approach_offset
         self.safe_dist = safe_dist
         self.repulsive_gain = repulsive_gain
+        self.tool_tip_vertical_offset = float(tool_tip_vertical_offset)
+        self.tool_scoop_command = float(tool_scoop_command)
+        self.hold_orientation = bool(hold_orientation)
+        self._hold_rot = None
 
         if obj_cfg_path:
             with open(obj_cfg_path, 'r') as f:
@@ -45,15 +54,28 @@ class ApproachAndAlign(BaseSkill):
         eef_rot = R.from_quat(task_state['eef_quat'])
         tgt_id = task_state['tgt_id']
         if not self._is_compatible(tgt_id, task_state):
-            return np.zeros(7)
+            return np.zeros(9, dtype=np.float32)
 
         obj_pos = task_state['obj_pos'][tgt_id]
-        obj_quat = task_state['obj_quat'][tgt_id]
         obj_bbox = task_state['obj_bbox'][tgt_id]
 
+        # Aim the tracked tool tip (not the wrist) at the hover point by
+        # offsetting the EEF target with the live EEF-to-tip vector; falls
+        # back to the fixed vertical offset when no tip estimate exists.
         target_pos = obj_pos.copy()
         target_pos[2] = obj_bbox[5] + self.approach_offset
-        target_rot = self._grasp_orientation(eef_rot, obj_quat, tgt_id)
+        tip = task_state.get("tip_pos")
+        if tip is not None:
+            target_pos += (np.asarray(eef_pos, dtype=np.float64)
+                           - np.asarray(tip, dtype=np.float64))
+        else:
+            target_pos[2] += self.tool_tip_vertical_offset
+        if self.hold_orientation:
+            if self._hold_rot is None:
+                self._hold_rot = eef_rot
+            target_rot = self._hold_rot
+        else:
+            target_rot = eef_rot
         twist = self._compute_twist(eef_pos, eef_rot, target_pos, target_rot)
 
         # APF collision avoidance (exclude target object)
@@ -69,14 +91,24 @@ class ApproachAndAlign(BaseSkill):
                 [0.0, 0.0, abs(np.dot(twist[:3], apf))])
         twist[:3] += apf
 
-        return np.concatenate([twist, [1.0]])  # gripper open
+        action = np.zeros(9, dtype=np.float32)
+        action[:6] = twist
+        action[8] = self.tool_scoop_command
+        return action
+
+    def reset(self):
+        super().reset()
+        self._hold_rot = None
 
     def is_complete(self, task_state):
+        # Judge completion on the tool tip itself so the criteria fire when
+        # the tip (not the wrist) is over the food
         filtered = task_state.copy()
         filtered['obj_bbox'] = {
             oid: bbox for oid, bbox in task_state['obj_bbox'].items()
             if self._is_compatible(oid, task_state)
         }
+        filtered['eef_pos'] = self._tool_tip_pos(task_state)
         return super().is_complete(filtered)
 
     def get_candidates(self, task_state):
@@ -104,37 +136,10 @@ class ApproachAndAlign(BaseSkill):
 
         return task_state.get('eef', 'gripper') in compatible_eefs
 
-    # ------------------------------------------------------------------
-    # Grasp orientation
-    # ------------------------------------------------------------------
-
-    def _grasp_orientation(self, eef_rot, obj_quat, tgt_id):
-        """Target grasp rotation: z down, x aligned in XY, pitched."""
-        align = 0
-        approach_angle = np.deg2rad(-45.0)
-        if self.food_json and tgt_id in self.food_json:
-            align = self.food_json[tgt_id].get('align', 0)
-            approach_angle = np.deg2rad(
-                self.food_json[tgt_id].get('approach_angle', -45.0))
-
-        z_down = np.array([0.0, 0.0, -1.0])
-
-        if align:
-            obj_rot = R.from_quat(obj_quat)
-            ref = np.array([1, 0, 0]) if align == 1 else np.array([0, 1, 0])
-            long_axis = self._get_rotated_axis_in_xy(obj_rot, ref)
-            candidates = [self._make_frame(d, z_down, approach_angle)
-                          for d in (long_axis, -long_axis)]
-            return min(candidates,
-                       key=lambda r: (r * eef_rot.inv()).magnitude())
-        else:
-            y_dir = self._get_rotated_axis_in_xy(eef_rot, np.array([0, 1, 0]))
-            x_dir = np.cross(y_dir, z_down)
-            return self._make_frame(x_dir, z_down, approach_angle)
-
-    @staticmethod
-    def _make_frame(x, z, pitch_angle):
-        """Build [x, z×x, z] frame, then pitch around local y."""
-        y = np.cross(z, x)
-        frame = R.from_matrix(np.column_stack((x, y, z)))
-        return frame * R.from_rotvec(pitch_angle * np.array([0, 1, 0]))
+    def _tool_tip_pos(self, task_state):
+        tip = task_state.get("tip_pos")
+        if tip is not None:
+            return np.asarray(tip, dtype=np.float64)
+        pos = np.asarray(task_state['eef_pos'], dtype=np.float64).copy()
+        pos[2] -= self.tool_tip_vertical_offset
+        return pos

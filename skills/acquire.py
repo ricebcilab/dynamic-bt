@@ -5,7 +5,7 @@ import logging
 
 import numpy as np
 
-from ..base_skill import BaseSkill, SKILL_REGISTRY
+from .base_skill import BaseSkill, SKILL_REGISTRY
 
 
 class Acquire(BaseSkill):
@@ -55,7 +55,7 @@ class Acquire(BaseSkill):
         if self._tgt_id is not None:
             msg["tgt_id"] = self._tgt_id
         if self._acquired and self._tgt_id is not None:
-            msg["carried_bite_id"] = self._tgt_id
+            msg["acquired_id"] = self._tgt_id
         return msg
 
     def get_action(self, task_state):

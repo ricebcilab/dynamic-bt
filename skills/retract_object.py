@@ -55,13 +55,10 @@ class RetractObject(BaseSkill):
 
     def get_candidates(self, task_state):
         action = self.get_action(task_state)
-        if self._is_tool_mode(task_state):
-            default_key = task_state.get("carried_bite_id")
-            if default_key is None:
-                default_key = task_state.get("tgt_id", type(self).__name__)
-            key = self.received_message.get("tgt_id", default_key)
-        else:
-            key = self.received_message.get("tgt_id", self.tgt_id)
+        default_key = task_state.get("acquired_id")
+        if default_key is None:
+            default_key = task_state.get("tgt_id", type(self).__name__)
+        key = self.received_message.get("tgt_id", default_key)
         return {str(key): action}
 
     def is_complete(self, task_state):
@@ -82,7 +79,7 @@ class RetractObject(BaseSkill):
         eef_pos = task_state['eef_pos']
         eef_rot = R.from_quat(task_state['eef_quat'])
         mouth_pos = task_state['mouth_pos']
-        self.tgt_id = task_state['grasped_id']
+        self.tgt_id = task_state.get('acquired_id')
 
         if self.orient_mode == "mouth":
             target_rot = self._yaw_toward(eef_rot, mouth_pos - eef_pos)
@@ -126,10 +123,10 @@ class RetractObject(BaseSkill):
 
         twist = self._compute_twist(tip_pos, eef_rot, mouth_pos, target_rot)
 
-        carried_bite_id = task_state.get("carried_bite_id")
+        acquired_id = task_state.get("acquired_id")
         obstacles = [
             bbox for oid, bbox in task_state['obj_bbox'].items()
-            if str(oid) != str(carried_bite_id)
+            if str(oid) != str(acquired_id)
         ]
         apf = self._compute_apf(
             tip_pos, obstacles, self.safe_dist, self.repulsive_gain)

@@ -15,7 +15,8 @@ class Stab(BaseSkill):
             fast_z_speed, slow_z_speed, clearance_ref ("table" or
             "target_top": tracked tip vs the target's bbox top), stab_depth,
             floor_guard, xy_gain, xy_tolerance (target_top mode: steer the tip
-            over the target's center and descend stab_depth into its bbox).
+            over the target's center, hold off the descent until within
+            xy_tolerance, then descend stab_depth into its bbox).
     """
 
     def __init__(
@@ -64,17 +65,22 @@ class Stab(BaseSkill):
     def get_action(self, task_state):
         action = np.zeros(9, dtype=np.float32)
         clearance = self._tip_clearance(task_state)
-        if clearance > self.fast_clearance:
-            action[2] = self.fast_z_speed
-        elif clearance > self.slow_clearance:
-            action[2] = self.slow_z_speed
-        # Steer the tip over the target's center while descending
+        # Steer the tip over the target's center; gate the descent on alignment
+        centered = True
         if self.clearance_ref == "target_top":
             err = self._center_xy_error(task_state)
             if err is not None:
                 action[:2] = np.clip(
                     self.xy_gain * err,
                     -abs(self.fast_z_speed), abs(self.fast_z_speed))
+                if self.xy_tolerance is not None:
+                    centered = float(np.linalg.norm(err)) <= self.xy_tolerance
+        # Descend only once centered over the target
+        if centered:
+            if clearance > self.fast_clearance:
+                action[2] = self.fast_z_speed
+            elif clearance > self.slow_clearance:
+                action[2] = self.slow_z_speed
         # Hold the orientation captured at skill start
         if self.hold_orientation and "eef_quat" in task_state:
             eef_rot = R.from_quat(task_state["eef_quat"])

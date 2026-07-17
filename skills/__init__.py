@@ -8,4 +8,6 @@ from .retract_object import RetractObject
 from .retreat import Retreat
 from .scoop import Scoop
 from .stab import Stab
+from .tool_approach import ToolApproach
+from .tool_present import ToolPresent
 from .twirl import Twirl

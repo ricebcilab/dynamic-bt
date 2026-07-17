@@ -31,7 +31,6 @@ class _State:
     invariant: str | None = None
     fallback: str | None = None
     idle_action: list[float] | None = None
-    admin: bool = False
 
     def check_invariant(self, task_state: dict) -> bool:
         """True if the invariant holds or there is none."""
@@ -184,18 +183,13 @@ class DynamicBT:
         return self.current_state
     
     @property
-    def is_admin_mode(self) -> bool:
-        """True when the current state is marked as an admin state."""
-        return bool(self._states[self.current_state].admin)
-
-    @property
     def message(self) -> dict:
         """Current message surfaced to consumers and the FSM.
 
         Union of the forwarded message (from the last completed skill) and the
         executing skill's live message; the executing skill takes precedence.
-        Carries skill effect keys (``eef``, ``carried_bite_id``,
-        ``request_home``, ``disable_floor_guard``) for the FSM to apply.
+        Carries skill effect keys (e.g. ``acquired_id``) for the FSM to
+        apply.
         """
         msg = dict(self._message)
         if self._active_edges and self._active_edges[0].skill is not None:
@@ -227,9 +221,8 @@ class DynamicBT:
     def get_action(self, task_state) -> tuple[np.ndarray, dict]:
         """Return (action, message) for the first active edge's skill.
 
-        The message carries the skill's effect keys (e.g. ``eef``,
-        ``carried_bite_id``, ``request_home``, ``disable_floor_guard``) for the
-        FSM to apply; skills never mutate ``task_state`` themselves.
+        The message carries the skill's effect keys (e.g. ``acquired_id``)
+        for the FSM to apply; skills never mutate ``task_state`` themselves.
         """
         state_def = self._states[self.current_state]
         idle = state_def.idle_action

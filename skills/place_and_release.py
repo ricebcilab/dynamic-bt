@@ -74,13 +74,13 @@ class PlaceAndRelease(BaseSkill):
         cell_h = (y_max - y_min) / self.grid_resolution
 
         eef_pos = task_state['eef_pos']
-        grasped_id = task_state.get('grasped_id')
+        acquired_id = task_state.get('acquired_id')
 
         # Collect non-grasped objects' XY rects and z_mins in one pass
         obj_rects = []
         z_mins = []
         for oid, bbox in task_state['obj_bbox'].items():
-            if oid != grasped_id:
+            if oid != acquired_id:
                 obj_rects.append((bbox[0], bbox[2], bbox[1], bbox[3]))
                 z_mins.append(bbox[4])
 
@@ -89,7 +89,7 @@ class PlaceAndRelease(BaseSkill):
             self.table_z = max(z_mins) if z_mins else eef_pos[2]
 
         # Target EEF z: place object bottom at table surface
-        obj_bbox = task_state['obj_bbox'].get(grasped_id)
+        obj_bbox = task_state['obj_bbox'].get(acquired_id)
         eef_to_obj_bottom = (eef_pos[2] - obj_bbox[4]) \
             if obj_bbox is not None else 0.0
         target_z = self.table_z + eef_to_obj_bottom
@@ -126,15 +126,15 @@ class PlaceAndRelease(BaseSkill):
         """Twist toward target, yaw toward +X, APF avoidance, open gripper when close."""
         eef_pos = task_state['eef_pos']
         eef_rot = R.from_quat(task_state['eef_quat'])
-        grasped_id = task_state.get('grasped_id')
+        acquired_id = task_state.get('acquired_id')
 
         target_rot = self._yaw_to_world_x(eef_rot)
         twist = self._compute_twist(eef_pos, eef_rot, target_pos, target_rot)
 
         # APF: grasped-object bbox vs obstacle bboxes
-        obj_bbox = task_state['obj_bbox'].get(grasped_id)
+        obj_bbox = task_state['obj_bbox'].get(acquired_id)
         obstacles = [bbox for oid, bbox in task_state['obj_bbox'].items()
-                     if oid != grasped_id]
+                     if oid != acquired_id]
         apf = self._compute_apf_with_object(
             obj_bbox, obstacles, self.safe_dist, self.repulsive_gain)
 

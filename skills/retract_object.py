@@ -8,11 +8,13 @@ import numpy as np
 from scipy.spatial.transform import Rotation as R
 
 from .base_skill import BaseSkill, EPS
-from .eef.common import tool_tip_clearance, tool_tip_pos
 
 
 class RetractObject(BaseSkill):
     """Transport the acquired item to mouth with APF.
+
+    Tool geometry comes from the environment as task_state["tip_pos"] and
+    task_state["tip_clearance"].
 
     Params: gain, max_linear_speed, max_angular_speed, safe_dist,
             repulsive_gain, orient_mode ("mouth" or "world_y"), tool_eefs,
@@ -24,11 +26,6 @@ class RetractObject(BaseSkill):
         gain=1.0, max_linear_speed=0.3, max_angular_speed=1.0,
         safe_dist=0.03, repulsive_gain=0.5, orient_mode="world_y",
         tool_eefs=("fork", "spoon"), tool_scoop_command=-1.0,
-        gripper_to_scoop_servo=0.13, scoop_servo_to_tip=0.167,
-        tool_tip_gripper_to_scoop_servo=0.115,
-        scoop_to_twirl_servo=0.055, twirl_to_tool_tip=0.190,
-        table_z=0.0, z_calibration_offset=0.0,
-        default_scoop_angle_deg=270.0,
         transport_clearance=0.05, hard_clearance=0.01,
         lift_z_speed=0.05, tool_mouth_tolerance=0.05,
         **kwargs):
@@ -45,15 +42,6 @@ class RetractObject(BaseSkill):
             tool_eefs = (tool_eefs,)
         self.tool_eefs = {str(eef) for eef in tool_eefs}
         self.tool_scoop_command = float(tool_scoop_command)
-        self.gripper_to_scoop_servo = float(gripper_to_scoop_servo)
-        self.scoop_servo_to_tip = float(scoop_servo_to_tip)
-        self.tool_tip_gripper_to_scoop_servo = float(
-            tool_tip_gripper_to_scoop_servo)
-        self.scoop_to_twirl_servo = float(scoop_to_twirl_servo)
-        self.twirl_to_tool_tip = float(twirl_to_tool_tip)
-        self.table_z = float(table_z)
-        self.z_calibration_offset = float(z_calibration_offset)
-        self.default_scoop_angle_deg = float(default_scoop_angle_deg)
         self.hard_clearance = float(hard_clearance)
         self.transport_clearance = max(
             float(transport_clearance), self.hard_clearance)
@@ -67,13 +55,10 @@ class RetractObject(BaseSkill):
 
     def get_candidates(self, task_state):
         action = self.get_action(task_state)
-        if self._is_tool_mode(task_state):
-            default_key = task_state.get("carried_bite_id")
-            if default_key is None:
-                default_key = task_state.get("tgt_id", type(self).__name__)
-            key = self.received_message.get("tgt_id", default_key)
-        else:
-            key = self.received_message.get("tgt_id", self.tgt_id)
+        default_key = task_state.get("acquired_id")
+        if default_key is None:
+            default_key = task_state.get("tgt_id", type(self).__name__)
+        key = self.received_message.get("tgt_id", default_key)
         return {str(key): action}
 
     def is_complete(self, task_state):
@@ -81,7 +66,7 @@ class RetractObject(BaseSkill):
             return super().is_complete(task_state)
 
         mouth_pos = np.asarray(task_state["mouth_pos"], dtype=np.float64)
-        tip_pos = self._tool_tip_pos(task_state)
+        tip_pos = np.asarray(task_state["tip_pos"], dtype=np.float64)
         return (
             np.linalg.norm(tip_pos - mouth_pos)
             <= self.tool_mouth_tolerance
@@ -94,7 +79,7 @@ class RetractObject(BaseSkill):
         eef_pos = task_state['eef_pos']
         eef_rot = R.from_quat(task_state['eef_quat'])
         mouth_pos = task_state['mouth_pos']
-        self.tgt_id = task_state['grasped_id']
+        self.tgt_id = task_state.get('acquired_id')
 
         if self.orient_mode == "mouth":
             target_rot = self._yaw_toward(eef_rot, mouth_pos - eef_pos)
@@ -122,8 +107,8 @@ class RetractObject(BaseSkill):
     def _get_tool_action(self, task_state):
         eef_rot = R.from_quat(task_state['eef_quat'])
         mouth_pos = task_state['mouth_pos']
-        tip_pos = self._tool_tip_pos(task_state)
-        clearance = self._tool_tip_clearance(task_state)
+        tip_pos = np.asarray(task_state['tip_pos'], dtype=np.float64)
+        clearance = float(task_state['tip_clearance'])
 
         if clearance < self.transport_clearance:
             action = np.zeros(9, dtype=np.float32)
@@ -138,10 +123,10 @@ class RetractObject(BaseSkill):
 
         twist = self._compute_twist(tip_pos, eef_rot, mouth_pos, target_rot)
 
-        carried_bite_id = task_state.get("carried_bite_id")
+        acquired_id = task_state.get("acquired_id")
         obstacles = [
             bbox for oid, bbox in task_state['obj_bbox'].items()
-            if str(oid) != str(carried_bite_id)
+            if str(oid) != str(acquired_id)
         ]
         apf = self._compute_apf(
             tip_pos, obstacles, self.safe_dist, self.repulsive_gain)
@@ -153,25 +138,6 @@ class RetractObject(BaseSkill):
         action[:6] = twist
         action[8] = self.tool_scoop_command
         return action
-
-    def _tool_tip_clearance(self, task_state):
-        return tool_tip_clearance(
-            task_state,
-            gripper_to_scoop_servo=self.gripper_to_scoop_servo,
-            scoop_servo_to_tip=self.scoop_servo_to_tip,
-            table_z=self.table_z,
-            z_calibration_offset=self.z_calibration_offset,
-            default_scoop_angle_deg=self.default_scoop_angle_deg,
-        )
-
-    def _tool_tip_pos(self, task_state):
-        return tool_tip_pos(
-            task_state,
-            gripper_to_scoop_servo=self.tool_tip_gripper_to_scoop_servo,
-            scoop_to_twirl_servo=self.scoop_to_twirl_servo,
-            twirl_to_tool_tip=self.twirl_to_tool_tip,
-            default_scoop_angle_deg=self.default_scoop_angle_deg,
-        )
 
     def _yaw_toward(self, eef_rot, direction):
         """Yaw EEF around world Z so its z-axis projects toward direction in XY."""

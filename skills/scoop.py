@@ -4,7 +4,7 @@ import time
 
 import numpy as np
 
-from ..base_skill import BaseSkill
+from .base_skill import BaseSkill
 
 
 class Scoop(BaseSkill):

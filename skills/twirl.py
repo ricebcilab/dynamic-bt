@@ -64,8 +64,6 @@ class Twirl(BaseSkill):
         self.last_twirl_direction = self._direction_from(self.velocity_raw)
         self._last_angle = None
         self._accum_deg = 0.0
-        self._sample_duration()
-        self._sample_rounds()
 
     def reset(self):
         super().reset()

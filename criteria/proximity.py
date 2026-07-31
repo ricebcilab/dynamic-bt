@@ -1,28 +1,52 @@
 """Distance-below-threshold criterion."""
 
+import time
+
 import numpy as np
 
 from .base_criteria import AXIS_MAP, BaseCriteria
 
 
 class Proximity(BaseCriteria):
-    """Check if distance between two positions is below threshold."""
+    """Check if distance between two positions is below threshold.
+
+    With a non-zero ``duration`` the distance must hold below threshold for
+    that many seconds before the criterion passes.
+    """
 
     def __init__(
         self,
         threshold: float,
         axes: str = "xyz",
+        duration: float = 0.0,
         **kwargs
     ):
         super().__init__()
         self.threshold = threshold
         self.indices = AXIS_MAP.get(axes, [0, 1, 2])
+        self.duration = float(duration)
+        self.last_check_ts = None
+
+    def reset(self):
+        super().reset()
+        self.last_check_ts = None
 
     def _check_proximity(self, a, b):
         diff = np.asarray(a) - np.asarray(b)
         return float(np.linalg.norm(diff[self.indices])) < self.threshold
 
     def check(self, a, b, tgt_id=None) -> bool:
+        if not self._check_distance(a, b, tgt_id):
+            # Condition lapsed - restart the dwell timer next time it holds
+            self.last_check_ts = None
+            return False
+
+        if self.last_check_ts is None:
+            self.last_check_ts = time.monotonic()
+
+        return (time.monotonic() - self.last_check_ts) >= self.duration
+
+    def _check_distance(self, a, b, tgt_id=None) -> bool:
         if isinstance(b, dict):
             # One to one check
             if tgt_id is not None:

@@ -11,14 +11,15 @@ from skills.direct_grasp import DirectGrasp
 from skills.base_skill import SKILL_REGISTRY
 
 TGT = "r1_d2_a3_b4"
+DROP = "0"
 
 
 def state(obj_pos, obj_quat, drop_pos=None, drop_quat=None):
     op = {TGT: np.asarray(obj_pos, dtype=float)}
     oq = {TGT: np.asarray(obj_quat, dtype=float)}
     if drop_pos is not None:
-        op["drop"] = np.asarray(drop_pos, dtype=float)
-        oq["drop"] = np.asarray(drop_quat, dtype=float)
+        op[DROP] = np.asarray(drop_pos, dtype=float)
+        oq[DROP] = np.asarray(drop_quat, dtype=float)
     return {"eef_pos": np.zeros(3),
             "eef_quat": np.array([0.0, 0.0, 0.0, 1.0]),
             "tgt_id": TGT, "obj_pos": op, "obj_quat": oq}

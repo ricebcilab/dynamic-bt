@@ -12,14 +12,16 @@ class DirectGrasp(BaseSkill):
     twist toward the target.
 
     target_source "object" resolves the pose from obj_pos/obj_quat[tgt_id];
-    "drop" resolves obj_pos/obj_quat["drop"]. tip_offset (EEF frame) shifts
-    the convergence point from the EEF origin to the fingertip midpoint.
+    "drop" resolves obj_pos/obj_quat[drop_key], the env's drop pseudo-entry.
+    tip_offset (EEF frame) shifts the convergence point from the EEF origin to
+    the fingertip midpoint.
 
-    Params: target_source, tip_offset, gain, max_linear_speed,
+    Params: target_source, drop_key, tip_offset, gain, max_linear_speed,
             max_angular_speed, gripper_action
     """
 
-    def __init__(self, target_source="object", tip_offset=(0.0, 0.0, 0.0),
+    def __init__(self, target_source="object", drop_key="0",
+                 tip_offset=(0.0, 0.0, 0.0),
                  gain=1.0, max_linear_speed=0.3, max_angular_speed=1.0,
                  gripper_action=0.0, **kwargs):
         super().__init__()
@@ -27,6 +29,7 @@ class DirectGrasp(BaseSkill):
             raise ValueError(
                 f"Unknown target_source '{target_source}' (object|drop)")
         self.target_source = target_source
+        self.drop_key = str(drop_key)
         self.tip_offset = np.asarray(tip_offset, dtype=float)
         self.gain = gain
         self.max_linear_speed = max_linear_speed
@@ -37,7 +40,8 @@ class DirectGrasp(BaseSkill):
         eef_pos = np.asarray(task_state["eef_pos"], dtype=float)
         eef_rot = R.from_quat(task_state["eef_quat"])
 
-        key = "drop" if self.target_source == "drop" else task_state["tgt_id"]
+        key = self.drop_key if self.target_source == "drop" \
+            else task_state["tgt_id"]
         target_pos = np.asarray(task_state["obj_pos"][key], dtype=float)
         target_rot = R.from_quat(
             np.asarray(task_state["obj_quat"][key], dtype=float))

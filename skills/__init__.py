@@ -2,6 +2,7 @@ from .base_skill import BaseSkill, SKILL_REGISTRY
 from .acquire import Acquire
 from .approach_and_align import ApproachAndAlign
 from .descend_and_grasp import DescendAndGrasp
+from .direct_grasp import DirectGrasp
 from .place_and_release import PlaceAndRelease
 from .reach_point import ReachPoint
 from .retract_object import RetractObject

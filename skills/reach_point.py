@@ -7,17 +7,23 @@ from .base_skill import BaseSkill
 
 
 class ReachPoint(BaseSkill):
-    """Drive the EEF to a task_state position with a fixed gripper command.
+    """Drive the EEF to a task_state position while holding its orientation.
 
-    Orientation is held, so the emitted twist is translation-only.
+    The held orientation is anchored once, on the first frame after the skill
+    is activated, and the emitted twist corrects back toward that anchor.
+    Targeting the *current* orientation instead would leave the orientation
+    loop with no restoring term, so any disturbance (e.g. the reaction torque
+    of the gripper closing) would be adopted as the new target and ratchet.
 
-    Params: target_key, gain, max_linear_speed, gripper_action
+    Params: target_key, gain, max_linear_speed, max_angular_speed,
+    gripper_action
     """
 
     def __init__(
         self,
         target_key="mouth_pos",
-        gain=1.0, max_linear_speed=0.3, gripper_action=0.0,
+        gain=1.0, max_linear_speed=0.3, max_angular_speed=0.3,
+        gripper_action=0.0,
         **kwargs):
 
         super().__init__()
@@ -25,15 +31,25 @@ class ReachPoint(BaseSkill):
         self.target_key = target_key
         self.gain = gain
         self.max_linear_speed = max_linear_speed
-        self.max_angular_speed = 0.0
+        self.max_angular_speed = max_angular_speed
         self.gripper_action = float(gripper_action)
+
+        self.hold_rot = None
+
+    def reset(self):
+        super().reset()
+        self.hold_rot = None
 
     def get_action(self, task_state):
         eef_pos = task_state['eef_pos']
         eef_rot = R.from_quat(task_state['eef_quat'])
         target_pos = np.asarray(task_state[self.target_key], dtype=float)
 
-        twist = self._compute_twist(eef_pos, eef_rot, target_pos, eef_rot)
+        # Anchor the held orientation on the first frame after activation
+        if self.hold_rot is None:
+            self.hold_rot = eef_rot
+
+        twist = self._compute_twist(eef_pos, eef_rot, target_pos, self.hold_rot)
 
         return np.concatenate([twist, [self.gripper_action]])
 

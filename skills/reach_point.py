@@ -9,14 +9,10 @@ from .base_skill import BaseSkill
 class ReachPoint(BaseSkill):
     """Drive the EEF to a task_state position while holding its orientation.
 
-    The held orientation is anchored once, on the first frame after the skill
-    is activated, and the emitted twist corrects back toward that anchor.
-    Targeting the *current* orientation instead would leave the orientation
-    loop with no restoring term, so any disturbance (e.g. the reaction torque
-    of the gripper closing) would be adopted as the new target and ratchet.
-
-    Params: target_key, gain, max_linear_speed, max_angular_speed,
-    gripper_action
+    The held orientation is anchored on the first frame after activation, so
+    the orientation loop keeps a restoring term. With grasp_radius set, the
+    gripper switches to grasp_action inside that radius on frames where
+    grasp_required holds; None keeps gripper_action throughout.
     """
 
     def __init__(
@@ -24,6 +20,7 @@ class ReachPoint(BaseSkill):
         target_key="mouth_pos",
         gain=1.0, max_linear_speed=0.3, max_angular_speed=0.3,
         gripper_action=0.0,
+        grasp_radius=None, grasp_action=-1.0,
         **kwargs):
 
         super().__init__()
@@ -33,6 +30,8 @@ class ReachPoint(BaseSkill):
         self.max_linear_speed = max_linear_speed
         self.max_angular_speed = max_angular_speed
         self.gripper_action = float(gripper_action)
+        self.grasp_radius = None if grasp_radius is None else float(grasp_radius)
+        self.grasp_action = float(grasp_action)
 
         self.hold_rot = None
 
@@ -51,7 +50,15 @@ class ReachPoint(BaseSkill):
 
         twist = self._compute_twist(eef_pos, eef_rot, target_pos, self.hold_rot)
 
-        return np.concatenate([twist, [self.gripper_action]])
+        # Grasp on approach: flip the gripper inside grasp_radius when required
+        gripper = self.gripper_action
+        if (self.grasp_radius is not None
+                and task_state.get('grasp_required', True)
+                and float(np.linalg.norm(
+                    np.asarray(eef_pos, dtype=float) - target_pos)) < self.grasp_radius):
+            gripper = self.grasp_action
+
+        return np.concatenate([twist, [gripper]])
 
     def get_candidates(self, task_state):
         return {type(self).__name__: self.get_action(task_state)}

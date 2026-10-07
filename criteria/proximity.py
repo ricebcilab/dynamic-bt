@@ -11,7 +11,8 @@ class Proximity(BaseCriteria):
     """Check if distance between two positions is below threshold.
 
     With a non-zero ``duration`` the distance must hold below threshold for
-    that many seconds before the criterion passes.
+    that many seconds before the criterion passes. ``negate`` inverts the
+    test, passing while the distance is at or above threshold.
     """
 
     def __init__(
@@ -19,10 +20,12 @@ class Proximity(BaseCriteria):
         threshold: float,
         axes: str = "xyz",
         duration: float = 0.0,
+        negate: bool = False,
         **kwargs
     ):
         super().__init__()
         self.threshold = threshold
+        self.negate = bool(negate)
         self.indices = AXIS_MAP.get(axes, [0, 1, 2])
         self.duration = float(duration)
         self.last_check_ts = None
@@ -36,7 +39,7 @@ class Proximity(BaseCriteria):
         return float(np.linalg.norm(diff[self.indices])) < self.threshold
 
     def check(self, a, b, tgt_id=None) -> bool:
-        if not self._check_distance(a, b, tgt_id):
+        if self._check_distance(a, b, tgt_id) == self.negate:
             # Condition lapsed - restart the dwell timer next time it holds
             self.last_check_ts = None
             return False
